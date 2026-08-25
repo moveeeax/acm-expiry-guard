@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-test:
-    runs-on: acm-expiry-guard
+    runs-on: ubuntu-latest
     steps:
       - name: Install base tooling
         run: |
