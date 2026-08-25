@@ -1,0 +1,42 @@
+[
+  {
+    "arn": "arn:aws:acm:eu-west-1:111122223333:certificate/imported",
+    "domain": "legacy.example.com",
+    "region": "eu-west-1",
+    "not_after": "2026-01-05T00:00:00Z",
+    "days_left": 4,
+    "renewable": false,
+    "in_use": true,
+    "reason": "expires soon; imported (no auto-renew)"
+  },
+  {
+    "arn": "arn:aws:acm:us-east-1:111122223333:certificate/edge",
+    "domain": "www.example.com",
+    "region": "us-east-1",
+    "not_after": "2026-01-13T00:00:00Z",
+    "days_left": 12,
+    "renewable": true,
+    "in_use": true,
+    "reason": "expires soon"
+  },
+  {
+    "arn": "arn:aws:acm:us-east-1:111122223333:certificate/healthy",
+    "domain": "api.example.com",
+    "region": "us-east-1",
+    "not_after": "2026-08-29T00:00:00Z",
+    "days_left": 240,
+    "renewable": true,
+    "in_use": true,
+    "reason": "ok"
+  },
+  {
+    "arn": "arn:aws:acm:us-east-1:111122223333:certificate/unused",
+    "domain": "old.example.com",
+    "region": "us-east-1",
+    "not_after": "2026-10-08T00:00:00Z",
+    "days_left": 280,
+    "renewable": false,
+    "in_use": false,
+    "reason": "not in use"
+  }
+]

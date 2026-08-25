@@ -1,0 +1,17 @@
+# Compiled binary at repo root only. Anchor with a leading slash so this never
+# matches the cmd/acm-expiry-guard/ source directory.
+/acm-expiry-guard
+
+# Go build/test artifacts
+/dist/
+*.test
+*.out
+coverage.txt
+
+# Editor/OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# Never drop the example fixtures.
+!examples/**
