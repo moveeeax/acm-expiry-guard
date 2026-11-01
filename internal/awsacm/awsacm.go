@@ -46,7 +46,7 @@ func (c *Client) List(ctx context.Context, region string) ([]checker.Certificate
 	client := c.newAPI(region)
 	var out []checker.Certificate
 
-	paginator := acm.NewListCertificatesPaginator(client, &acm.ListCertificatesInput{})
+	paginator := acm.NewListCertificatesPaginator(client, listInput())
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
@@ -64,6 +64,15 @@ func (c *Client) List(ctx context.Context, region string) ([]checker.Certificate
 		}
 	}
 	return out, nil
+}
+
+// listInput asks ListCertificates for every key algorithm. Without an explicit
+// Includes.KeyTypes filter ACM returns only RSA_1024 and RSA_2048 certificates,
+// so ECDSA and RSA 3072/4096 certificates would never be checked.
+func listInput() *acm.ListCertificatesInput {
+	return &acm.ListCertificatesInput{
+		Includes: &types.Filters{KeyTypes: types.KeyAlgorithm("").Values()},
+	}
 }
 
 func (c *Client) describe(ctx context.Context, client api, region, arn string) (checker.Certificate, error) {

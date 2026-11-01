@@ -16,9 +16,11 @@ type fakeAPI struct {
 	pages   [][]types.CertificateSummary
 	details map[string]*types.CertificateDetail
 	call    int
+	inputs  []*acm.ListCertificatesInput
 }
 
-func (f *fakeAPI) ListCertificates(_ context.Context, _ *acm.ListCertificatesInput, _ ...func(*acm.Options)) (*acm.ListCertificatesOutput, error) {
+func (f *fakeAPI) ListCertificates(_ context.Context, in *acm.ListCertificatesInput, _ ...func(*acm.Options)) (*acm.ListCertificatesOutput, error) {
+	f.inputs = append(f.inputs, in)
 	out := &acm.ListCertificatesOutput{CertificateSummaryList: f.pages[f.call]}
 	if f.call < len(f.pages)-1 {
 		token := "next"
@@ -84,5 +86,46 @@ func TestListMapsFieldsAcrossPages(t *testing.T) {
 	b := certs[1]
 	if b.Type != "IMPORTED" || len(b.InUseBy) != 0 {
 		t.Errorf("cert b type/inuse = %q/%v", b.Type, b.InUseBy)
+	}
+}
+
+// ACM's default ListCertificates filter returns only RSA_1024 and RSA_2048
+// certificates; every request must ask for all key algorithms explicitly.
+func TestListRequestsEveryKeyType(t *testing.T) {
+	fake := &fakeAPI{
+		pages:   [][]types.CertificateSummary{{}, {}},
+		details: map[string]*types.CertificateDetail{},
+	}
+	c := &Client{newAPI: func(string) api { return fake }}
+
+	if _, err := c.List(context.Background(), "us-east-1"); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(fake.inputs) != 2 {
+		t.Fatalf("got %d ListCertificates calls, want 2", len(fake.inputs))
+	}
+	want := types.KeyAlgorithm("").Values()
+	for i, in := range fake.inputs {
+		if in.Includes == nil {
+			t.Fatalf("call %d: Includes is nil, ACM would return RSA_1024/RSA_2048 only", i)
+		}
+		got := map[types.KeyAlgorithm]bool{}
+		for _, k := range in.Includes.KeyTypes {
+			got[k] = true
+		}
+		for _, k := range want {
+			if !got[k] {
+				t.Errorf("call %d: KeyTypes missing %s", i, k)
+			}
+		}
+	}
+	for _, k := range []types.KeyAlgorithm{types.KeyAlgorithmEcPrime256v1, types.KeyAlgorithmRsa4096} {
+		found := false
+		for _, v := range want {
+			found = found || v == k
+		}
+		if !found {
+			t.Errorf("KeyAlgorithm.Values() lacks %s", k)
+		}
 	}
 }
