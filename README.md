@@ -1,7 +1,7 @@
 # acm-expiry-guard
 
 [![ci](https://github.com/moveeeax/acm-expiry-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/moveeeax/acm-expiry-guard/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go)](https://go.dev)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Audit AWS Certificate Manager (ACM) certificate expiry across every region and
@@ -31,6 +31,8 @@ go install github.com/moveeeax/acm-expiry-guard/cmd/acm-expiry-guard@latest
 ```
 
 Or build from source: `go build -o acm-expiry-guard ./cmd/acm-expiry-guard`.
+
+Requires Go 1.26 or newer.
 
 ## Usage
 
