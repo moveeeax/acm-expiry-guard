@@ -14,14 +14,27 @@ import (
 	"github.com/moveeeax/acm-expiry-guard/internal/checker"
 )
 
-// defaultRegions is the standard set of commercial AWS regions scanned with
-// --all-regions. It intentionally omits GovCloud and China partitions.
+// defaultRegions is the set of commercial AWS regions scanned with
+// --all-regions: all 34 regions of the standard "aws" partition as listed in
+// https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html
+// (checked 2026-11-02; ACM has an endpoint in each, see
+// https://docs.aws.amazon.com/general/latest/gr/acm.html). GovCloud, China and
+// other isolated partitions are intentionally omitted. Regions launched after
+// 2019-03-20 are opt-in and must be enabled in the account to be scanned.
 var defaultRegions = []string{
+	// enabled by default
 	"us-east-1", "us-east-2", "us-west-1", "us-west-2",
 	"ca-central-1", "sa-east-1",
-	"eu-west-1", "eu-west-2", "eu-west-3", "eu-central-1", "eu-north-1", "eu-south-1",
-	"ap-south-1", "ap-southeast-1", "ap-southeast-2", "ap-northeast-1", "ap-northeast-2", "ap-northeast-3",
-	"me-south-1", "af-south-1",
+	"eu-central-1", "eu-west-1", "eu-west-2", "eu-west-3", "eu-north-1",
+	"ap-south-1", "ap-northeast-1", "ap-northeast-2", "ap-northeast-3",
+	"ap-southeast-1", "ap-southeast-2",
+	// opt-in
+	"af-south-1",
+	"ap-east-1", "ap-east-2", "ap-south-2",
+	"ap-southeast-3", "ap-southeast-4", "ap-southeast-5", "ap-southeast-6", "ap-southeast-7",
+	"ca-west-1", "mx-central-1",
+	"eu-south-1", "eu-south-2", "eu-central-2",
+	"il-central-1", "me-south-1", "me-central-1",
 }
 
 func main() {
@@ -33,7 +46,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	fs.SetOutput(stderr)
 	var (
 		regionsCSV = fs.String("regions", "", "comma-separated regions to scan (default: AWS_REGION or us-east-1)")
-		allRegions = fs.Bool("all-regions", false, "scan every standard commercial region")
+		allRegions = fs.Bool("all-regions", false, "scan all 34 commercial regions (opt-in regions must be enabled)")
 		days       = fs.Int("days", 30, "expiry threshold in days")
 		failOn     = fs.String("fail-on", "expiring", "what turns the exit code red: none|expiring|non-renewable")
 		asJSON     = fs.Bool("json", false, "emit JSON instead of a table")

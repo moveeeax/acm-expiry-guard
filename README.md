@@ -15,7 +15,8 @@ turns that into a check you run on every deploy.
 
 ## What it does
 
-- Lists ACM certificates across all — or a chosen subset of — regions.
+- Lists ACM certificates across all — or a chosen subset of — regions,
+  for every key algorithm (RSA 1024–4096 and ECDSA P-256/P-384/P-521).
 - For each cert reads `NotAfter`, `Type` (`AMAZON_ISSUED` vs `IMPORTED`),
   `RenewalEligibility`, and `InUseBy`.
 - Flags certificates **expiring** within a threshold (default 30 days) and
@@ -60,10 +61,24 @@ old.example.com     us-east-1  amazon    280        no         no      2026-10-0
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--regions` | `AWS_REGION` or `us-east-1` | Comma-separated regions to scan |
-| `--all-regions` | `false` | Scan every standard commercial region |
+| `--all-regions` | `false` | Scan all 34 commercial regions (see below) |
 | `--days` | `30` | Expiry threshold in days |
 | `--fail-on` | `expiring` | Exit-code trigger: `none`, `expiring`, or `non-renewable` |
 | `--json` | `false` | Emit JSON instead of a table |
+
+### Regions and opt-in
+
+`--all-regions` scans the 34 regions of the standard `aws` partition listed in
+the [AWS Regions table](https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html)
+(checked 2026-11-02). GovCloud and China are not included.
+
+17 of them were launched after 2019-03-20 and are opt-in: `af-south-1`,
+`ap-east-1`, `ap-east-2`, `ap-south-2`, `ap-southeast-3` through
+`ap-southeast-7`, `ca-west-1`, `mx-central-1`, `eu-south-1`, `eu-south-2`,
+`eu-central-2`, `il-central-1`, `me-south-1`, `me-central-1`. A call to a region
+that is not enabled in the account fails, and the tool then exits with `2`. If
+your account has not enabled every opt-in region, pass the regions you use with
+`--regions` instead.
 
 ### Exit codes
 
