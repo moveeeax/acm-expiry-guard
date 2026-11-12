@@ -184,7 +184,7 @@ func TestJSONShape(t *testing.T) {
 	if len(decoded) == 0 {
 		t.Fatal("empty JSON array")
 	}
-	for _, k := range []string{"arn", "domain", "region", "not_after", "days_left", "renewable", "in_use", "reason"} {
+	for _, k := range []string{"arn", "domain", "region", "not_after", "days_left", "renewable", "in_use", "reason", "renewal_failing"} {
 		if _, ok := decoded[0][k]; !ok {
 			t.Errorf("JSON object missing key %q", k)
 		}
@@ -207,5 +207,109 @@ func TestNoNotAfterSortsLastAndNoDays(t *testing.T) {
 	}
 	if last.NotAfter != "" {
 		t.Errorf("cert without NotAfter should have empty NotAfter, got %q", last.NotAfter)
+	}
+}
+
+// stuckRenewal is an eligible, in-use, far-from-expiry cert whose managed
+// renewal is waiting on a validation that will not complete.
+func stuckRenewal(now time.Time, status string) Certificate {
+	return Certificate{
+		ARN: "arn:stuck", Domain: "stuck.example.com", Region: "us-east-1",
+		NotAfter: at(now.Add(50 * 24 * time.Hour)),
+		Type:     "AMAZON_ISSUED", RenewalEligibility: "ELIGIBLE",
+		Status: "ISSUED", InUseBy: []string{"arn:elb/app"},
+		RenewalStatus: status,
+		RenewalValidations: []DomainValidation{
+			{Domain: "stuck.example.com", Status: "SUCCESS"},
+			{Domain: "www.stuck.example.com", Status: "PENDING_VALIDATION"},
+		},
+	}
+}
+
+func TestRenewalStuck(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		status  string
+		failing bool
+		reason  string
+	}{
+		{"PENDING_VALIDATION", true, "renewal stuck: PENDING_VALIDATION (www.stuck.example.com PENDING_VALIDATION)"},
+		{"FAILED", true, "renewal stuck: FAILED (www.stuck.example.com PENDING_VALIDATION)"},
+		{"PENDING_AUTO_RENEWAL", false, "ok"},
+		{"SUCCESS", false, "ok"},
+		{"", false, "ok"},
+	}
+	for _, c := range cases {
+		r := Evaluate([]Certificate{stuckRenewal(now, c.status)}, Options{Days: 30, Now: now})[0]
+		if r.RenewalFailing != c.failing {
+			t.Errorf("%q: RenewalFailing=%v want %v", c.status, r.RenewalFailing, c.failing)
+		}
+		if r.Reason != c.reason {
+			t.Errorf("%q: reason=%q want %q", c.status, r.Reason, c.reason)
+		}
+		if r.RenewalStatus != c.status {
+			t.Errorf("%q: RenewalStatus=%q", c.status, r.RenewalStatus)
+		}
+		if !r.Renewable {
+			t.Errorf("%q: stuck renewal must not change Renewable", c.status)
+		}
+	}
+}
+
+func TestRenewalFailedReasonIncludesStatusReason(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	c := stuckRenewal(now, "FAILED")
+	c.RenewalStatusReason = "CAA_ERROR"
+	c.RenewalValidations = nil
+	r := Evaluate([]Certificate{c}, Options{Days: 30, Now: now})[0]
+	if want := "renewal stuck: FAILED (CAA_ERROR)"; r.Reason != want {
+		t.Errorf("reason=%q want %q", r.Reason, want)
+	}
+}
+
+func TestExitCodeRenewalFailing(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	stuck := Evaluate([]Certificate{stuckRenewal(now, "PENDING_VALIDATION")}, Options{Days: 30, Now: now})
+	for mode, want := range map[FailMode]int{
+		FailNone:           0,
+		FailExpiring:       0,
+		FailRenewalFailing: 1,
+		FailNonRenewable:   1,
+	} {
+		if got := ExitCode(stuck, mode); got != want {
+			t.Errorf("stuck renewal, fail-on %s: exit=%d want %d", mode, got, want)
+		}
+	}
+
+	// renewal-failing still fails on expiring certs, but not on certs that are
+	// merely non-renewable.
+	if got := ExitCode(collect(t, now, "us-east-1"), FailRenewalFailing); got != 1 {
+		t.Errorf("expiring set, fail-on renewal-failing: exit=%d want 1", got)
+	}
+	unused := Evaluate([]Certificate{fixtures(now)[3]}, Options{Days: 30, Now: now})
+	if got := ExitCode(unused, FailRenewalFailing); got != 0 {
+		t.Errorf("unused cert, fail-on renewal-failing: exit=%d want 0", got)
+	}
+}
+
+func TestCNAMEProblemsInReasonAndFailing(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	c := fixtures(now)[0]
+	c.CNAMEProblems = []CNAMEProblem{{Name: "_a.healthy.example.com", Kind: CNAMEMissing}}
+	r := Evaluate([]Certificate{c}, Options{Days: 30, Now: now})[0]
+	if !r.RenewalFailing {
+		t.Error("missing CNAME should mark renewal failing")
+	}
+	if want := "validation CNAME missing: _a.healthy.example.com"; r.Reason != want {
+		t.Errorf("reason=%q want %q", r.Reason, want)
+	}
+
+	c.CNAMEProblems = []CNAMEProblem{{Name: "_a.healthy.example.com", Kind: CNAMELookupFailed}}
+	r = Evaluate([]Certificate{c}, Options{Days: 30, Now: now})[0]
+	if r.RenewalFailing {
+		t.Error("a failed lookup alone should not mark renewal failing")
+	}
+	if want := "validation CNAME lookup failed: _a.healthy.example.com"; r.Reason != want {
+		t.Errorf("reason=%q want %q", r.Reason, want)
 	}
 }

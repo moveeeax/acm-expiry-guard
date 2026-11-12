@@ -7,8 +7,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/moveeeax/acm-expiry-guard/internal/awsacm"
 	"github.com/moveeeax/acm-expiry-guard/internal/checker"
@@ -37,6 +39,9 @@ var defaultRegions = []string{
 	"il-central-1", "me-south-1", "me-central-1",
 }
 
+// dnsTimeout bounds each validation CNAME lookup made by --check-dns.
+const dnsTimeout = 5 * time.Second
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -48,8 +53,9 @@ func run(args []string, stdout, stderr *os.File) int {
 		regionsCSV = fs.String("regions", "", "comma-separated regions to scan (default: AWS_REGION or us-east-1)")
 		allRegions = fs.Bool("all-regions", false, "scan all 34 commercial regions (opt-in regions must be enabled)")
 		days       = fs.Int("days", 30, "expiry threshold in days")
-		failOn     = fs.String("fail-on", "expiring", "what turns the exit code red: none|expiring|non-renewable")
+		failOn     = fs.String("fail-on", "expiring", "what turns the exit code red: none|expiring|renewal-failing|non-renewable")
 		asJSON     = fs.Bool("json", false, "emit JSON instead of a table")
+		checkDNS   = fs.Bool("check-dns", false, "resolve each DNS validation CNAME and report missing or wrong ones")
 	)
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: acm-expiry-guard [flags]\n\nAudit ACM certificate expiry across AWS regions.\n\nflags:\n")
@@ -59,11 +65,9 @@ func run(args []string, stdout, stderr *os.File) int {
 		return 2
 	}
 
-	mode := checker.FailMode(*failOn)
-	switch mode {
-	case checker.FailNone, checker.FailExpiring, checker.FailNonRenewable:
-	default:
-		fmt.Fprintf(stderr, "invalid --fail-on %q (want none|expiring|non-renewable)\n", *failOn)
+	mode, ok := parseFailMode(*failOn)
+	if !ok {
+		fmt.Fprintf(stderr, "invalid --fail-on %q (want none|expiring|renewal-failing|non-renewable)\n", *failOn)
 		return 2
 	}
 
@@ -89,6 +93,11 @@ func run(args []string, stdout, stderr *os.File) int {
 		}
 		certs = append(certs, got...)
 	}
+	if *checkDNS {
+		// The pure-Go resolver asks for the CNAME record itself, so a record
+		// whose target has no A/AAAA records still resolves.
+		checker.CheckDNS(ctx, certs, &net.Resolver{PreferGo: true}, dnsTimeout)
+	}
 
 	results := checker.Evaluate(certs, checker.Options{Days: *days})
 	if *asJSON {
@@ -104,6 +113,16 @@ func run(args []string, stdout, stderr *os.File) int {
 	}
 
 	return checker.ExitCode(results, mode)
+}
+
+// parseFailMode validates a --fail-on value.
+func parseFailMode(s string) (checker.FailMode, bool) {
+	mode := checker.FailMode(s)
+	switch mode {
+	case checker.FailNone, checker.FailExpiring, checker.FailRenewalFailing, checker.FailNonRenewable:
+		return mode, true
+	}
+	return "", false
 }
 
 func resolveRegions(csv string, all bool) []string {

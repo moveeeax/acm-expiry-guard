@@ -21,3 +21,14 @@ func TestResolveRegionsAll(t *testing.T) {
 		t.Errorf("--all-regions returned %d regions, want %d", len(got), len(defaultRegions))
 	}
 }
+
+func TestParseFailMode(t *testing.T) {
+	for _, s := range []string{"none", "expiring", "renewal-failing", "non-renewable"} {
+		if got, ok := parseFailMode(s); !ok || string(got) != s {
+			t.Errorf("parseFailMode(%q) = %q, %v", s, got, ok)
+		}
+	}
+	if _, ok := parseFailMode("renewal"); ok {
+		t.Error(`parseFailMode("renewal") accepted`)
+	}
+}

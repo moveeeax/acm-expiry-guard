@@ -18,9 +18,14 @@ turns that into a check you run on every deploy.
 - Lists ACM certificates across all — or a chosen subset of — regions,
   for every key algorithm (RSA 1024–4096 and ECDSA P-256/P-384/P-521).
 - For each cert reads `NotAfter`, `Type` (`AMAZON_ISSUED` vs `IMPORTED`),
-  `RenewalEligibility`, and `InUseBy`.
-- Flags certificates **expiring** within a threshold (default 30 days) and
-  certificates that will **not auto-renew** (imported, ineligible, or unused).
+  `RenewalEligibility`, `InUseBy`, and the managed renewal state
+  (`RenewalSummary.RenewalStatus` and per-domain `ValidationStatus`).
+- Flags certificates **expiring** within a threshold (default 30 days),
+  certificates that will **not auto-renew** (imported, ineligible, or unused),
+  and certificates whose **managed renewal is stuck** (`PENDING_VALIDATION` or
+  `FAILED`).
+- With `--check-dns`, resolves each DNS validation CNAME and reports missing
+  or wrong ones before ACM's next renewal attempt trips over them.
 - Prints a table sorted soonest-expiry-first, or `--json` for machines.
 - **Exits non-zero** when a certificate breaches the threshold, so it gates CI.
 
@@ -38,7 +43,8 @@ Requires Go 1.26 or newer.
 
 Credentials are resolved the standard AWS way (`AWS_PROFILE`, environment,
 instance role, SSO — anything the SDK understands). The tool only needs
-`acm:ListCertificates` and `acm:DescribeCertificate`.
+`acm:ListCertificates` and `acm:DescribeCertificate`. `--check-dns` queries the
+system's DNS resolvers and needs no AWS permissions.
 
 ```sh
 # Two regions, fail the build if anything expires within 30 days
@@ -46,6 +52,9 @@ acm-expiry-guard --regions us-east-1,eu-west-1 --days 30 --fail-on expiring
 
 # Every commercial region, machine-readable
 acm-expiry-guard --all-regions --json
+
+# Also fail on stuck renewals and deleted validation CNAMEs
+acm-expiry-guard --all-regions --check-dns --fail-on renewal-failing
 ```
 
 Sample table output ([full fixture](examples/sample-table.txt)):
@@ -54,6 +63,7 @@ Sample table output ([full fixture](examples/sample-table.txt)):
 DOMAIN              REGION     TYPE      DAYS LEFT  RENEWABLE  IN USE  EXPIRES     REASON
 legacy.example.com  eu-west-1  imported  4          no         yes     2026-01-05  expires soon; imported (no auto-renew)
 www.example.com     us-east-1  amazon    12         yes        yes     2026-01-13  expires soon
+shop.example.com    us-east-1  amazon    45         yes        yes     2026-02-15  renewal stuck: PENDING_VALIDATION (www.shop.example.com PENDING_VALIDATION)
 api.example.com     us-east-1  amazon    240        yes        yes     2026-08-29  ok
 old.example.com     us-east-1  amazon    280        no         no      2026-10-08  not in use
 ```
@@ -65,7 +75,8 @@ old.example.com     us-east-1  amazon    280        no         no      2026-10-0
 | `--regions` | `AWS_REGION` or `us-east-1` | Comma-separated regions to scan |
 | `--all-regions` | `false` | Scan all 34 commercial regions (see below) |
 | `--days` | `30` | Expiry threshold in days |
-| `--fail-on` | `expiring` | Exit-code trigger: `none`, `expiring`, or `non-renewable` |
+| `--fail-on` | `expiring` | Exit-code trigger: `none`, `expiring`, `renewal-failing`, or `non-renewable` |
+| `--check-dns` | `false` | Resolve each DNS validation CNAME and report missing or wrong ones |
 | `--json` | `false` | Emit JSON instead of a table |
 
 ### Regions and opt-in
@@ -88,9 +99,45 @@ your account has not enabled every opt-in region, pass the regions you use with
 - `1` — at least one certificate is at risk under the chosen mode.
 - `2` — usage or AWS error.
 
-`--fail-on non-renewable` is stricter than `expiring`: it also fails on
-certificates that AWS will never auto-renew, even if they aren't expiring yet —
-useful for catching imported certs early.
+Each mode includes the ones before it:
+
+- `expiring` fails on certificates inside the `--days` window.
+- `renewal-failing` also fails on certificates whose managed renewal is stuck
+  or whose validation CNAME is missing (see below), even if they aren't
+  expiring yet.
+- `non-renewable` also fails on certificates that AWS will never auto-renew —
+  useful for catching imported certs early.
+
+### Stuck renewals
+
+ACM starts a managed renewal 45 days before expiry for public certificates
+and 60 days for private ones, and reports it in `RenewalSummary`
+([renewal status docs](https://docs.aws.amazon.com/acm/latest/userguide/check-certificate-renewal-status.html)). A DNS-validated cert whose validation CNAME was deleted keeps
+`RenewalEligibility=ELIGIBLE`, so the eligibility check alone misses it. The
+tool reads the renewal status and adds a reason:
+
+- `PENDING_VALIDATION` or `FAILED`: `renewal stuck: <status>`, followed by
+  ACM's failure reason (if any) and the domains whose validation is not
+  `SUCCESS`, e.g.
+  `renewal stuck: PENDING_VALIDATION (www.shop.example.com PENDING_VALIDATION)`.
+  The JSON output sets `renewal_failing: true` and `renewal_status`.
+- `PENDING_AUTO_RENEWAL` (ACM is still validating on its own; AWS says no
+  action is required) and `SUCCESS` are not flagged. If a renewal stays pending until the `--days` window, the
+  expiry check catches it.
+
+`--check-dns` finds the broken record before the renewal starts. For every
+issued Amazon certificate it looks up each validation record name and expects
+a CNAME to the value ACM gave. Reasons:
+
+- `validation CNAME missing: <name>`: the name does not resolve.
+- `validation CNAME mismatch: <name>`: it resolves, but to something else.
+- `validation CNAME lookup failed: <name>`: timeout or server error. This is
+  reported but does not set `renewal_failing`, since it says nothing about the
+  record itself.
+
+Each lookup has a 5-second timeout. Records in a private hosted zone only
+resolve from inside the VPC, so run `--check-dns` where those zones are
+visible.
 
 ## How it works
 
