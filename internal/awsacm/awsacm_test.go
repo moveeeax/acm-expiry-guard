@@ -129,3 +129,75 @@ func TestListRequestsEveryKeyType(t *testing.T) {
 		}
 	}
 }
+
+func TestListMapsRenewalSummaryAndValidationRecords(t *testing.T) {
+	record := &types.ResourceRecord{
+		Name:  aws.String("_x.a.example.com."),
+		Type:  types.RecordTypeCname,
+		Value: aws.String("_y.acm-validations.aws."),
+	}
+	fake := &fakeAPI{
+		pages: [][]types.CertificateSummary{{{CertificateArn: aws.String("arn:a")}}},
+		details: map[string]*types.CertificateDetail{
+			"arn:a": {
+				DomainName:         aws.String("a.example.com"),
+				Type:               types.CertificateTypeAmazonIssued,
+				RenewalEligibility: types.RenewalEligibilityEligible,
+				Status:             types.CertificateStatusIssued,
+				DomainValidationOptions: []types.DomainValidation{
+					{DomainName: aws.String("a.example.com"), ValidationMethod: types.ValidationMethodDns, ValidationStatus: types.DomainStatusSuccess, ResourceRecord: record},
+					{DomainName: aws.String("mail.example.com"), ValidationMethod: types.ValidationMethodEmail, ValidationStatus: types.DomainStatusSuccess},
+				},
+				RenewalSummary: &types.RenewalSummary{
+					RenewalStatus:       types.RenewalStatusFailed,
+					RenewalStatusReason: types.FailureReasonCaaError,
+					DomainValidationOptions: []types.DomainValidation{
+						{DomainName: aws.String("a.example.com"), ValidationMethod: types.ValidationMethodDns, ValidationStatus: types.DomainStatusFailed, ResourceRecord: record},
+						{DomainName: aws.String("mail.example.com"), ValidationMethod: types.ValidationMethodEmail, ValidationStatus: types.DomainStatusPendingValidation},
+					},
+				},
+			},
+		},
+	}
+	c := &Client{newAPI: func(string) api { return fake }}
+
+	certs, err := c.List(context.Background(), "us-east-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	a := certs[0]
+	if a.RenewalStatus != "FAILED" || a.RenewalStatusReason != "CAA_ERROR" {
+		t.Errorf("renewal status/reason = %q/%q", a.RenewalStatus, a.RenewalStatusReason)
+	}
+	if len(a.RenewalValidations) != 2 ||
+		a.RenewalValidations[0].Domain != "a.example.com" || a.RenewalValidations[0].Status != "FAILED" ||
+		a.RenewalValidations[1].Domain != "mail.example.com" || a.RenewalValidations[1].Status != "PENDING_VALIDATION" {
+		t.Errorf("RenewalValidations = %+v", a.RenewalValidations)
+	}
+	// Email validation has no record; the DNS record appears in both lists.
+	if len(a.ValidationRecords) != 2 {
+		t.Fatalf("ValidationRecords = %+v, want the DNS record twice", a.ValidationRecords)
+	}
+	for _, r := range a.ValidationRecords {
+		if r.Domain != "a.example.com" || r.Name != "_x.a.example.com." || r.Value != "_y.acm-validations.aws." {
+			t.Errorf("ValidationRecord = %+v", r)
+		}
+	}
+}
+
+func TestListWithoutRenewalSummary(t *testing.T) {
+	fake := &fakeAPI{
+		pages: [][]types.CertificateSummary{{{CertificateArn: aws.String("arn:b")}}},
+		details: map[string]*types.CertificateDetail{
+			"arn:b": {DomainName: aws.String("b.example.com"), Type: types.CertificateTypeImported},
+		},
+	}
+	c := &Client{newAPI: func(string) api { return fake }}
+	certs, err := c.List(context.Background(), "us-east-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if b := certs[0]; b.RenewalStatus != "" || b.RenewalValidations != nil || b.ValidationRecords != nil {
+		t.Errorf("imported cert got renewal data: %+v", b)
+	}
+}

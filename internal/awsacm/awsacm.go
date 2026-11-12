@@ -91,7 +91,38 @@ func (c *Client) describe(ctx context.Context, client api, region, arn string) (
 	cert.RenewalEligibility = string(d.RenewalEligibility)
 	cert.Status = string(d.Status)
 	cert.InUseBy = append(cert.InUseBy, inUse(d)...)
+	if rs := d.RenewalSummary; rs != nil {
+		cert.RenewalStatus = string(rs.RenewalStatus)
+		cert.RenewalStatusReason = string(rs.RenewalStatusReason)
+		for _, v := range rs.DomainValidationOptions {
+			cert.RenewalValidations = append(cert.RenewalValidations, checker.DomainValidation{
+				Domain: aws.ToString(v.DomainName),
+				Status: string(v.ValidationStatus),
+			})
+		}
+		cert.ValidationRecords = append(cert.ValidationRecords, validationRecords(rs.DomainValidationOptions)...)
+	}
+	cert.ValidationRecords = append(cert.ValidationRecords, validationRecords(d.DomainValidationOptions)...)
 	return cert, nil
+}
+
+// validationRecords collects the DNS validation CNAMEs. The certificate's own
+// DomainValidationOptions carry them for DNS-validated certificates; the
+// renewal summary may repeat them. CheckDNS skips duplicates.
+func validationRecords(opts []types.DomainValidation) []checker.ValidationRecord {
+	var out []checker.ValidationRecord
+	for _, v := range opts {
+		rr := v.ResourceRecord
+		if v.ValidationMethod != types.ValidationMethodDns || rr == nil || rr.Type != types.RecordTypeCname {
+			continue
+		}
+		out = append(out, checker.ValidationRecord{
+			Domain: aws.ToString(v.DomainName),
+			Name:   aws.ToString(rr.Name),
+			Value:  aws.ToString(rr.Value),
+		})
+	}
+	return out
 }
 
 func inUse(d *types.CertificateDetail) []string {

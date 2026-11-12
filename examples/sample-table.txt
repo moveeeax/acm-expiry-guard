@@ -1,5 +1,6 @@
 DOMAIN              REGION     TYPE      DAYS LEFT  RENEWABLE  IN USE  EXPIRES     REASON
 legacy.example.com  eu-west-1  imported  4          no         yes     2026-01-05  expires soon; imported (no auto-renew)
 www.example.com     us-east-1  amazon    12         yes        yes     2026-01-13  expires soon
+shop.example.com    us-east-1  amazon    45         yes        yes     2026-02-15  renewal stuck: PENDING_VALIDATION (www.shop.example.com PENDING_VALIDATION)
 api.example.com     us-east-1  amazon    240        yes        yes     2026-08-29  ok
 old.example.com     us-east-1  amazon    280        no         no      2026-10-08  not in use

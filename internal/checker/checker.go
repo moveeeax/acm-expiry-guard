@@ -6,6 +6,7 @@ package checker
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,34 @@ type Certificate struct {
 	// Status is the ACM status, e.g. "ISSUED".
 	Status  string
 	InUseBy []string
+	// RenewalStatus is RenewalSummary.RenewalStatus: "PENDING_AUTO_RENEWAL",
+	// "PENDING_VALIDATION", "SUCCESS" or "FAILED". Empty when ACM has not
+	// started a managed renewal for the certificate.
+	RenewalStatus string
+	// RenewalStatusReason is RenewalSummary.RenewalStatusReason, e.g. "CAA_ERROR".
+	RenewalStatusReason string
+	// RenewalValidations is the per-domain validation state of the managed
+	// renewal (RenewalSummary.DomainValidationOptions).
+	RenewalValidations []DomainValidation
+	// ValidationRecords are the DNS validation CNAMEs ACM expects to exist.
+	// CheckDNS resolves them.
+	ValidationRecords []ValidationRecord
+	// CNAMEProblems is filled by CheckDNS; nil when DNS was not checked.
+	CNAMEProblems []CNAMEProblem
+}
+
+// DomainValidation is the validation state of one domain name.
+type DomainValidation struct {
+	Domain string
+	// Status is "PENDING_VALIDATION", "SUCCESS" or "FAILED".
+	Status string
+}
+
+// ValidationRecord is one DNS validation CNAME: Name must point to Value.
+type ValidationRecord struct {
+	Domain string
+	Name   string
+	Value  string
 }
 
 // Lister returns every certificate in a single region. The adapter implements
@@ -34,17 +63,23 @@ type Lister interface {
 
 // Result is one evaluated certificate, ready to render or serialize.
 type Result struct {
-	ARN          string `json:"arn"`
-	Domain       string `json:"domain"`
-	Region       string `json:"region"`
-	NotAfter     string `json:"not_after"`
-	DaysLeft     *int   `json:"days_left"`
-	Renewable    bool   `json:"renewable"`
-	InUse        bool   `json:"in_use"`
-	Reason       string `json:"reason"`
-	notAfterTime *time.Time
-	expiring     bool
-	certType     string
+	ARN       string `json:"arn"`
+	Domain    string `json:"domain"`
+	Region    string `json:"region"`
+	NotAfter  string `json:"not_after"`
+	DaysLeft  *int   `json:"days_left"`
+	Renewable bool   `json:"renewable"`
+	InUse     bool   `json:"in_use"`
+	Reason    string `json:"reason"`
+	// RenewalStatus is ACM's managed renewal status, empty when no renewal
+	// has started.
+	RenewalStatus string `json:"renewal_status,omitempty"`
+	// RenewalFailing is true when ACM's managed renewal is stuck or a DNS
+	// validation CNAME is missing.
+	RenewalFailing bool `json:"renewal_failing"`
+	notAfterTime   *time.Time
+	expiring       bool
+	certType       string
 }
 
 // Expiring reports whether the certificate is inside the danger window.
@@ -112,8 +147,57 @@ func evaluate(c Certificate, now time.Time, days int) Result {
 		c.RenewalEligibility == "ELIGIBLE" &&
 		len(c.InUseBy) > 0
 
+	r.RenewalStatus = c.RenewalStatus
+	r.RenewalFailing = renewalStuck(c) || len(brokenCNAMEs(c)) > 0
+
 	r.Reason = reason(c, r)
 	return r
+}
+
+// renewalStuck reports whether ACM's managed renewal needs a human: it is
+// waiting on domain validation it cannot complete, or it has failed.
+// PENDING_AUTO_RENEWAL is ACM still trying on its own and is not counted;
+// if it drags on, the expiry threshold catches the certificate.
+func renewalStuck(c Certificate) bool {
+	return c.RenewalStatus == "PENDING_VALIDATION" || c.RenewalStatus == "FAILED"
+}
+
+// brokenCNAMEs returns the names of validation CNAMEs that are missing or point
+// somewhere else. Lookup errors are not counted: they say nothing about the
+// record itself.
+func brokenCNAMEs(c Certificate) []string {
+	var out []string
+	for _, p := range c.CNAMEProblems {
+		if p.Kind != CNAMELookupFailed {
+			out = append(out, p.Name)
+		}
+	}
+	return out
+}
+
+// renewalReasons explains a stuck renewal and any CNAME problems.
+func renewalReasons(c Certificate) []string {
+	var parts []string
+	if renewalStuck(c) {
+		s := "renewal stuck: " + c.RenewalStatus
+		var details []string
+		if c.RenewalStatusReason != "" {
+			details = append(details, c.RenewalStatusReason)
+		}
+		for _, v := range c.RenewalValidations {
+			if v.Status != "" && v.Status != "SUCCESS" {
+				details = append(details, v.Domain+" "+v.Status)
+			}
+		}
+		if len(details) > 0 {
+			s += " (" + strings.Join(details, ", ") + ")"
+		}
+		parts = append(parts, s)
+	}
+	for _, p := range c.CNAMEProblems {
+		parts = append(parts, "validation CNAME "+string(p.Kind)+": "+p.Name)
+	}
+	return parts
 }
 
 // reason produces a short human explanation, leading with expiry when relevant.
@@ -141,6 +225,7 @@ func reason(c Certificate, r Result) string {
 			parts = append(parts, "not renewable")
 		}
 	}
+	parts = append(parts, renewalReasons(c)...)
 	if len(parts) == 0 {
 		return "ok"
 	}
@@ -165,9 +250,10 @@ func daysUntil(now, t time.Time) int {
 type FailMode string
 
 const (
-	FailNone         FailMode = "none"
-	FailExpiring     FailMode = "expiring"
-	FailNonRenewable FailMode = "non-renewable"
+	FailNone           FailMode = "none"
+	FailExpiring       FailMode = "expiring"
+	FailRenewalFailing FailMode = "renewal-failing"
+	FailNonRenewable   FailMode = "non-renewable"
 )
 
 // AtRisk reports whether a single result should trip the given fail mode.
@@ -177,8 +263,10 @@ func AtRisk(r Result, mode FailMode) bool {
 		return false
 	case FailExpiring:
 		return r.expiring
+	case FailRenewalFailing:
+		return r.expiring || r.RenewalFailing
 	case FailNonRenewable:
-		return r.expiring || !r.Renewable
+		return r.expiring || r.RenewalFailing || !r.Renewable
 	default:
 		return r.expiring
 	}

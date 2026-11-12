@@ -7,7 +7,8 @@
     "days_left": 4,
     "renewable": false,
     "in_use": true,
-    "reason": "expires soon; imported (no auto-renew)"
+    "reason": "expires soon; imported (no auto-renew)",
+    "renewal_failing": false
   },
   {
     "arn": "arn:aws:acm:us-east-1:111122223333:certificate/edge",
@@ -17,7 +18,20 @@
     "days_left": 12,
     "renewable": true,
     "in_use": true,
-    "reason": "expires soon"
+    "reason": "expires soon",
+    "renewal_failing": false
+  },
+  {
+    "arn": "arn:aws:acm:us-east-1:111122223333:certificate/stuck",
+    "domain": "shop.example.com",
+    "region": "us-east-1",
+    "not_after": "2026-02-15T00:00:00Z",
+    "days_left": 45,
+    "renewable": true,
+    "in_use": true,
+    "reason": "renewal stuck: PENDING_VALIDATION (www.shop.example.com PENDING_VALIDATION)",
+    "renewal_status": "PENDING_VALIDATION",
+    "renewal_failing": true
   },
   {
     "arn": "arn:aws:acm:us-east-1:111122223333:certificate/healthy",
@@ -27,7 +41,8 @@
     "days_left": 240,
     "renewable": true,
     "in_use": true,
-    "reason": "ok"
+    "reason": "ok",
+    "renewal_failing": false
   },
   {
     "arn": "arn:aws:acm:us-east-1:111122223333:certificate/unused",
@@ -37,6 +52,7 @@
     "days_left": 280,
     "renewable": false,
     "in_use": false,
-    "reason": "not in use"
+    "reason": "not in use",
+    "renewal_failing": false
   }
 ]
